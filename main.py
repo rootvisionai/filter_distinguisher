@@ -26,14 +26,33 @@ class ConvLayer(torch.nn.Module):
         return out
 
 class SSNet(torch.nn.Module):
-    def __init__(self):
+    def __init__(self,in_filters, out_filters):
         super(SSNet, self).__init__()
-        self.conv = ConvLayer(1, 32, kernel_size = 7, stride = 1)
-        self.relu = torch.nn.ReLU()
+        self.conv = ConvLayer(in_filters, out_filters, kernel_size = 7, stride = 1)
         
     def forward(self, x):
-        out = self.relu(self.conv(x))
+        out = self.conv(x)
         return out
+
+class SSNetMultiple(torch.nn.Module):
+    def __init__(self):
+        super(SSNetMultiple, self).__init__()
+        self.children = []
+        for cnt in range(8):
+            if cnt == 0:
+                in_filters, out_filters = 1,32
+            else:
+                in_filters, out_filters = 32,32
+            self.children.append(SSNet(in_filters, out_filters))
+        
+        self.main = nn.Sequential(*self.children)
+        
+    def forward(self, x, queue = 1):
+        outs = [x]
+        for cnt,child in enumerate(self.main):
+            if cnt<queue:
+                outs.append(child(outs[-1]))
+        return outs[-1]
     
 def sim_func(layers):
     combinations = list(itertools.combinations(np.arange(0,layers.shape[1]), 2))
@@ -54,20 +73,28 @@ dataset = datasets.MNIST('../data',
                          train=True,
                          download=True,
                          transform=transform)
-model = SSNet()
-lr = 0.4
+model = SSNetMultiple()
+lr = 0.1
 optimizer = optim.SGD(model.parameters(), lr=lr)
+#scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.02)
 lossfunc = nn.MSELoss()
-for cnt,sample in enumerate(dataset):
-    optimizer.zero_grad()
-    image, label = sample
-    out = model(image.unsqueeze(0))
-    sim_vec = sim_func(out)
-    loss = lossfunc(sim_vec, torch.zeros(sim_vec.shape))
-    loss.backward()
-    optimizer.step()
-    loss_obs = torch.max(torch.abs(sim_vec-torch.zeros(sim_vec.shape)))
-    print(loss_obs)
+for epoch in range(8):
+    if epoch>0:
+        for cc,param in enumerate(model.main[epoch-1].parameters()):
+            print(epoch-1,"grad is deactivated")
+            param.requires_grad = False
+    for cnt,sample in enumerate(dataset):
+        if cnt<100:
+            optimizer.zero_grad()
+            image, label = sample
+            out = model(image.unsqueeze(0), queue = epoch+1)
+            sim_vec = sim_func(out)
+            loss = lossfunc(sim_vec, torch.zeros(sim_vec.shape))
+            loss_obs = torch.max(torch.abs(sim_vec-torch.zeros(sim_vec.shape)))
+            print("Epoch: {}\tSample: {}\tLoss: {}\tLR: {}".format(epoch,cnt,loss_obs,optimizer.param_groups[0]["lr"]))
+            loss.backward()
+            optimizer.step()
+    #scheduler.step()
     
 weights = model.conv.conv2d.weight.data.numpy()
 for cnt,weight in enumerate(weights):
