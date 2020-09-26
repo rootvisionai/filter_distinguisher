@@ -16,13 +16,13 @@ import matplotlib.pyplot as plt
 class ConvLayer(torch.nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride):
         super(ConvLayer, self).__init__()
-        reflection_padding = kernel_size // 2
-        self.reflection_pad = torch.nn.ReflectionPad2d(reflection_padding)
+        #reflection_padding = kernel_size // 2
+        #self.reflection_pad = torch.nn.ReflectionPad2d(reflection_padding)
         self.conv2d = torch.nn.Conv2d(in_channels, out_channels, kernel_size, stride)
 
     def forward(self, x):
-        out = self.reflection_pad(x)
-        out = self.conv2d(out)
+        #out = self.reflection_pad(x)
+        out = self.conv2d(x)
         return out
 
 class SSNet(torch.nn.Module):
@@ -38,7 +38,7 @@ class SSNetMultiple(torch.nn.Module):
     def __init__(self):
         super(SSNetMultiple, self).__init__()
         self.children = []
-        for cnt in range(8):
+        for cnt in range(3):
             if cnt == 0:
                 in_filters, out_filters = 1,32
             else:
@@ -84,7 +84,7 @@ for epoch in range(8):
             print(epoch-1,"grad is deactivated")
             param.requires_grad = False
     for cnt,sample in enumerate(dataset):
-        if cnt<100:
+        if cnt<1000:
             optimizer.zero_grad()
             image, label = sample
             out = model(image.unsqueeze(0), queue = epoch+1)
@@ -96,7 +96,11 @@ for epoch in range(8):
             optimizer.step()
     #scheduler.step()
     
-weights = model.conv.conv2d.weight.data.numpy()
+weights = model.main[-1].conv.conv2d.weight.data.numpy()
 for cnt,weight in enumerate(weights):
     plt.figure()
     plt.imshow(weight[0])
+    
+for cnt,layer in enumerate(out[0]):
+    plt.figure()
+    plt.imshow(layer.detach())
