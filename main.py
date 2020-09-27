@@ -28,21 +28,26 @@ class ConvLayer(torch.nn.Module):
 class SSNet(torch.nn.Module):
     def __init__(self,in_filters, out_filters):
         super(SSNet, self).__init__()
-        self.conv = ConvLayer(in_filters, out_filters, kernel_size = 7, stride = 1)
+        self.conv1 = ConvLayer(in_filters, 64, kernel_size = 5, stride = 1)
+        self.conv2 = ConvLayer(64, out_filters, kernel_size = 1, stride = 1)
+        self.relu = torch.nn.ReLU()
         
     def forward(self, x):
-        out = self.conv(x)
+        #out = self.conv1(x)
+        out = self.conv2(self.relu(self.conv1(x)))
         return out
 
 class SSNetMultiple(torch.nn.Module):
     def __init__(self):
         super(SSNetMultiple, self).__init__()
         self.children = []
-        for cnt in range(3):
+        for cnt in range(4):
             if cnt == 0:
-                in_filters, out_filters = 1,32
+                in_filters, out_filters = 1,16
+            elif cnt == 3:
+                in_filters, out_filters = 16,4
             else:
-                in_filters, out_filters = 32,32
+                in_filters, out_filters = 16,16
             self.children.append(SSNet(in_filters, out_filters))
         
         self.main = nn.Sequential(*self.children)
@@ -66,34 +71,44 @@ def sim_func(layers):
     return similarity_vector
     
 transform=transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,))
+        transforms.ToTensor()
         ])
 dataset = datasets.MNIST('../data',
                          train=True,
                          download=True,
                          transform=transform)
 model = SSNetMultiple()
-lr = 0.1
+lr = 0.8
 optimizer = optim.SGD(model.parameters(), lr=lr)
 #scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.02)
 lossfunc = nn.MSELoss()
-for epoch in range(8):
-    if epoch>0:
-        for cc,param in enumerate(model.main[epoch-1].parameters()):
-            print(epoch-1,"grad is deactivated")
-            param.requires_grad = False
+loss_obs = 0
+epoch = 0
+while epoch<4:
+#    if epoch>0:
+#        for cc,param in enumerate(model.main[epoch-1].parameters()):
+#            print(epoch-1,"grad is deactivated")
+#            param.requires_grad = True
     for cnt,sample in enumerate(dataset):
-        if cnt<1000:
-            optimizer.zero_grad()
-            image, label = sample
-            out = model(image.unsqueeze(0), queue = epoch+1)
-            sim_vec = sim_func(out)
-            loss = lossfunc(sim_vec, torch.zeros(sim_vec.shape))
-            loss_obs = torch.max(torch.abs(sim_vec-torch.zeros(sim_vec.shape)))
+        optimizer.zero_grad()
+        image, label = sample
+        out = model(image.unsqueeze(0), queue = epoch+1)
+        sim_vec = sim_func(out)
+        loss = lossfunc(sim_vec, torch.zeros(sim_vec.shape))
+        loss_obs_ = torch.max(torch.abs(sim_vec-torch.zeros(sim_vec.shape)))
+        loss_obs += loss_obs_
+        loss.backward()
+        optimizer.step()
+        print("__Loss: {}__".format(loss_obs_))
+
+        if cnt%10 == 0 and cnt!=0:
+            loss_obs = loss_obs/10
             print("Epoch: {}\tSample: {}\tLoss: {}\tLR: {}".format(epoch,cnt,loss_obs,optimizer.param_groups[0]["lr"]))
-            loss.backward()
-            optimizer.step()
+            if loss_obs<0.40:
+                epoch += 1
+                break
+            loss_obs = 0
+
     #scheduler.step()
     
 weights = model.main[-1].conv.conv2d.weight.data.numpy()
@@ -104,3 +119,31 @@ for cnt,weight in enumerate(weights):
 for cnt,layer in enumerate(out[0]):
     plt.figure()
     plt.imshow(layer.detach())
+
+def test(test_index = 0):
+    img0,label0 = dataset[test_index]
+    out0 = model(img0.unsqueeze(0), queue = 5)
+    
+    results = []
+    for cnt,sample in enumerate(dataset):
+        if cnt<10000 and cnt!=test_index:
+            img1, label1 = sample
+            out1 = model(img1.unsqueeze(0), queue = 5)
+            
+            first = out0.flatten()
+            second = out1.flatten()
+            
+            first_norm = (first - torch.mean(first)) / (torch.std(first) * len(first))
+            second_norm = (second - torch.mean(second)) / (torch.std(second))
+            
+            results.append(["{}-{}".format(label0,label1),torch.matmul(first_norm,second_norm.T).detach().numpy()])
+        
+    sorted_results = sorted(results,key = lambda x:x[1],reverse=True)
+    print(sorted_results[0:10],"\n")
+    return sorted_results
+
+sr1 = test(test_index = 2000)
+sr2 = test(test_index = 2001)
+sr3 = test(test_index = 2002)
+sr4 = test(test_index = 2003)
+sr5 = test(test_index = 2004)
