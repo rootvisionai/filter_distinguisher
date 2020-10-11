@@ -8,10 +8,9 @@ Created on Sat Sep 26 20:38:55 2020
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torchvision import datasets, transforms
+from torchvision import transforms
 import itertools
 import numpy as np
-import matplotlib.pyplot as plt
 import cv2
 from PIL import Image
 
@@ -39,7 +38,7 @@ class SSNet(torch.nn.Module):
 class SSNetMultiple(torch.nn.Module):
     def __init__(self,levels = 5):
         super(SSNetMultiple, self).__init__()
-        self.children = []
+        self.children_ = []
         for cnt in range(levels):
             if cnt == 0:
                 in_filters, out_filters = 3,16
@@ -47,9 +46,9 @@ class SSNetMultiple(torch.nn.Module):
                 in_filters, out_filters = 16,16
             else:
                 in_filters, out_filters = 16,16
-            self.children.append(SSNet(in_filters, out_filters))
+            self.children_.append(SSNet(in_filters, out_filters))
         
-        self.main = nn.Sequential(*self.children)
+        self.main = nn.Sequential(*self.children_)
         
     def forward(self, x, queue = 1):
         outs = [x]
@@ -84,7 +83,7 @@ def cam_to_tensor(cam):
     frame = cv2.cvtColor(frame_, cv2.COLOR_BGR2RGB)
     frame_pil = Image.fromarray(frame)
     image = transform(frame_pil)
-    return image, frame_, cam
+    return image, frame_, cam # image - pytorch tensor, image - opencv array, opencv capture object
 
 transform=transforms.Compose([
                             transforms.CenterCrop((360,360)),
@@ -97,7 +96,8 @@ transform=transforms.Compose([
 #                         transform=transform)
 model = SSNetMultiple(levels = 4)
 try:
-    model.load_state_dict(torch.load("./model_11_10_2020_city_video.pth"))
+    model.load_state_dict(torch.load("./model_videoplayback_2.pth"))
+    train = False
 except:
     train = True
     model.train()
@@ -106,7 +106,7 @@ lr = 0.02
 optimizer = optim.SGD(model.parameters(), lr=lr)
 lossfunc = nn.MSELoss()
 
-video_source = "./videoplayback.mp4"
+video_source = "./videoplayback_2.mp4"
 cam = cv2.VideoCapture(video_source)
 
 loss_obs = 0
@@ -118,7 +118,7 @@ if train:
     #            print(epoch-1,"grad is deactivated")
     #            param.requires_grad = True
         for cnt in range(0,120000):
-            image, _, cam = cam_to_tensor(cam)
+            image, _, cam = cam_to_tensor(cam) # get image tensor and capture object
             
             optimizer.zero_grad()
             out = model(image.unsqueeze(0), queue = epoch+1)
@@ -138,36 +138,66 @@ if train:
                     break
                 loss_obs = 0
 
-    torch.save(model.state_dict(), "./model_11_10_2020_city_video.pth")
+    torch.save(model.state_dict(), "./model_videoplayback_2.pth")
 
 def generate_embedding(model,cam,queue = 3):
-    image, frame, _ = cam_to_tensor(cam)
+    
+    # model: model that is usd to extract embedding
+    # cam: opencv capture object
+    # queue: level of model that we extract the embedding, final level is suggested
+    
+    image, frame, _ = cam_to_tensor(cam) # get image tensor and frame array
     embedding = model(image.unsqueeze(0), queue = queue).flatten()
     return embedding, frame
 
 def compare_samples(e1,e2):
+    
+    # e1: e2: embedding
+    
     first_norm = normalize(e1.flatten())
     second_norm = normalize(e2.flatten())
-    
     return torch.matmul(first_norm,second_norm.T).detach().numpy()
 
+def custom_center_crop_and_resize(frame, size_crop = 360, size_resize = 720):
+    
+    # frame: frame that is captured from opencv capture object
+    # size: 
+    
+    midr, midc = int(frame.shape[0]/2), int(frame.shape[1]/2)
+    frame_croped = frame[int(midr-(size_crop/2)): int(midr+(size_crop/2)),
+                         int(midc-(size_crop/2)): int(midc+(size_crop/2)),:]
+    frame_croped_resized = cv2.resize(frame_croped, (size_resize,size_resize), interpolation = cv2.INTER_AREA)
+    return frame_croped_resized
 
-embedding_list = []
-def compare_continuous(model,cam,queue):    
+def compare_continuous(model,
+                       cam,queue,
+                       memory_size = 2048,
+                       anchor_frame_change_interval = 120):
+    
+    # model: model that is usd to extract embedding
+    # cam: opencv capture object
+    # queue: level of model that we extract the embedding, final level is suggested
+    # anchor_frame_change_interval: interval to update anchor image, unit: frame rate
+        
     font                   = cv2.FONT_HERSHEY_SIMPLEX
-    bottomLeftCornerOfText = (10,100)
-    fontScale              = 1
+    bottomLeftCornerOfText_1 = (5,22)
+    bottomLeftCornerOfText_2 = (5,42)
+    fontScale              = 0.7
     fontColor              = (255,255,255)
     lineType               = 2
     
+    embedding_list = []
     cnt_f = 0
+    cnt_w = 0
     while True:
-        if cnt_f%300==0:
+        if cnt_f%anchor_frame_change_interval==0:
             e1, f1 = generate_embedding(model,cam,queue = queue)
+            f1 = custom_center_crop_and_resize(f1,360)
             cv2.imshow('frame 1', f1)
         
         e2, f2 = generate_embedding(model,cam,queue = queue)
         embedding_list.append(e2.detach().numpy())
+        embedding_list = embedding_list[-memory_size:]
         embedding_list_np = np.array(embedding_list)
         std = np.std(embedding_list_np, axis=0)
         pca_idx = std.argsort()[-64:][::-1]
@@ -178,16 +208,39 @@ def compare_continuous(model,cam,queue):
         sim = compare_samples(e1_pca,e2_pca)
         print(sim)
         
+        f2 = custom_center_crop_and_resize(f2,360)
+        
+        zeros = np.zeros(e2.shape)
+        zeros[pca_idx.tolist()] = 1
+        zeros = zeros.reshape(16,10,10)
+        zeros = np.sum(zeros.reshape(16,10,10),axis=0)
+        irows, icolumns = np.where(zeros==1)
+        coordinates = [elm for elm in zip(irows/10, icolumns/10)]
+        for elm in coordinates:
+            cv2.circle(f2,(int(elm[0]*720),int(elm[1]*720)),36,(255,255,255),3)
+        
+        cv2.rectangle(f2, (0, 0), (390,50), (64,64,64), -1)
+        
         cv2.putText(f2,'Similarity: {}'.format(sim), 
-            bottomLeftCornerOfText, 
+            bottomLeftCornerOfText_1, 
             font, 
             fontScale,
             fontColor,
             lineType)
+        cv2.putText(f2,'Frame: {}'.format(cnt_w), 
+            bottomLeftCornerOfText_2, 
+            font, 
+            fontScale,
+            fontColor,
+            lineType)
+        
         cv2.imshow('frame 2', f2)
         if cv2.waitKey(25) & 0xFF == ord('q'):
             break
         
         cnt_f += 1
+        cnt_w += 1
     
-compare_continuous(model,cam,queue=5)
+compare_continuous(model,cam,queue = 5,
+                   memory_size = 1024,
+                   anchor_frame_change_interval = 270)
