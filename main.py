@@ -106,7 +106,7 @@ lr = 0.02
 optimizer = optim.SGD(model.parameters(), lr=lr)
 lossfunc = nn.MSELoss()
 
-video_source = "./videoplayback_2.mp4"
+video_source = "./videoplayback_1.mp4"
 cam = cv2.VideoCapture(video_source)
 
 loss_obs = 0
@@ -173,8 +173,7 @@ def custom_center_crop_and_resize(frame, size_crop = 360, size_resize = 720):
 embedding_list = []
 def compare_continuous(model,
                        cam,queue, best_of = 64,
-                       memory_size = 2048,
-                       anchor_frame_change_interval = 120):
+                       memory_size = 2048):
     
     # model: model that is usd to extract embedding
     # cam: opencv capture object
@@ -182,17 +181,18 @@ def compare_continuous(model,
     # anchor_frame_change_interval: interval to update anchor image, unit: frame rate
         
     font                   = cv2.FONT_HERSHEY_SIMPLEX
-    bottomLeftCornerOfText_1 = (5,22)
-    bottomLeftCornerOfText_2 = (5,42)
-    fontScale              = 0.7
+    bottomLeftCornerOfText_1 = (1,12)
+    bottomLeftCornerOfText_2 = (1,27)
+    fontScale              = 0.5
     fontColor              = (255,255,255)
-    lineType               = 2
+    lineType               = 1
     
     global embedding_list
     cnt_f = 0
     cnt_w = 0
+    sim = 0
     while True:
-        if cnt_f%anchor_frame_change_interval==0:
+        if sim<0.4:
             e1, f1 = generate_embedding(model,cam,queue = queue)
             #f1 = custom_center_crop_and_resize(f1,360)
             cv2.imshow('frame 1', f1)
@@ -200,8 +200,8 @@ def compare_continuous(model,
         e2, f2 = generate_embedding(model,cam,queue = queue)
         embedding_list.append(e2.detach().numpy())
         if memory_size != -1:
-            embedding_list = embedding_list[-memory_size:]
-        embedding_list_np = np.array(embedding_list)
+            embedding_list_ = embedding_list[-memory_size:]
+        embedding_list_np = np.array(embedding_list_)
         std = np.std(embedding_list_np, axis=0)
         
         pca_idx = std.argsort()[-best_of:][::-1]
@@ -209,7 +209,6 @@ def compare_continuous(model,
         e2_pca = e2[pca_idx.tolist()]
         
         sim = compare_samples(e1_pca,e2_pca)
-        print(sim)
         
         #f2 = custom_center_crop_and_resize(f2,360)
         
@@ -218,13 +217,14 @@ def compare_continuous(model,
         zeros = zeros.reshape(16,10,10)
         zeros = np.sum(zeros.reshape(16,10,10),axis=0)
         irows, icolumns = np.where(zeros>=1)
-        coordinates = [elm for elm in zip(irows/10, icolumns/10)]
+        values = zeros[np.where(zeros>=1)]
+        coordinates = [elm for elm in zip(irows/10, icolumns/10, values)]
         for elm in coordinates:
-            cv2.circle(f2,(int(elm[0]*360+180),int(elm[1]*360)),10,(255,255,255),1)
+            cv2.circle(f2,(int(elm[0]*360+155),int(elm[1]*360+15)),int(elm[2]*3),(255,255,255),1)
         
-        cv2.rectangle(f2, (0, 0), (390,50), (64,64,64), -1)
+        cv2.rectangle(f2, (0, 0), (130,30), (64,64,64), -1)
         
-        cv2.putText(f2,'Similarity: {}'.format(sim), 
+        cv2.putText(f2,'Similarity: {}'.format(str(np.round(sim, 3))), 
             bottomLeftCornerOfText_1, 
             font, 
             fontScale,
@@ -245,5 +245,5 @@ def compare_continuous(model,
         cnt_w += 1
     
 compare_continuous(model,cam,queue = 5,
-                   memory_size = 8192, best_of = 64,
-                   anchor_frame_change_interval = 270)
+                   memory_size = 512,
+                   best_of = 64)
