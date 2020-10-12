@@ -113,10 +113,10 @@ loss_obs = 0
 epoch = 0
 if train:
     while epoch<4:
-    #    if epoch>0:
-    #        for cc,param in enumerate(model.main[epoch-1].parameters()):
-    #            print(epoch-1,"grad is deactivated")
-    #            param.requires_grad = True
+#        if epoch>0:
+#            for cc,param in enumerate(model.main[epoch-1].parameters()):
+#                print(epoch-1,"grad is deactivated")
+#                param.requires_grad = True
         for cnt in range(0,120000):
             image, _, cam = cam_to_tensor(cam) # get image tensor and capture object
             
@@ -132,8 +132,9 @@ if train:
     
             if cnt%20 == 0 and cnt!=0:
                 loss_obs = loss_obs/20
+                TH = 0.3 if epoch<3 else 0.2
                 print("Epoch: {}\tSample: {}\tLoss: {}\tLR: {}".format(epoch,cnt,loss_obs,optimizer.param_groups[0]["lr"]))
-                if loss_obs<0.30:
+                if loss_obs<TH or cnt>7000:
                     epoch += 1
                     break
                 loss_obs = 0
@@ -169,8 +170,9 @@ def custom_center_crop_and_resize(frame, size_crop = 360, size_resize = 720):
     frame_croped_resized = cv2.resize(frame_croped, (size_resize,size_resize), interpolation = cv2.INTER_AREA)
     return frame_croped_resized
 
+embedding_list = []
 def compare_continuous(model,
-                       cam,queue,
+                       cam,queue, best_of = 64,
                        memory_size = 2048,
                        anchor_frame_change_interval = 120):
     
@@ -186,38 +188,39 @@ def compare_continuous(model,
     fontColor              = (255,255,255)
     lineType               = 2
     
-    embedding_list = []
+    global embedding_list
     cnt_f = 0
     cnt_w = 0
     while True:
         if cnt_f%anchor_frame_change_interval==0:
             e1, f1 = generate_embedding(model,cam,queue = queue)
-            f1 = custom_center_crop_and_resize(f1,360)
+            #f1 = custom_center_crop_and_resize(f1,360)
             cv2.imshow('frame 1', f1)
         
         e2, f2 = generate_embedding(model,cam,queue = queue)
         embedding_list.append(e2.detach().numpy())
-        embedding_list = embedding_list[-memory_size:]
+        if memory_size != -1:
+            embedding_list = embedding_list[-memory_size:]
         embedding_list_np = np.array(embedding_list)
         std = np.std(embedding_list_np, axis=0)
-        pca_idx = std.argsort()[-64:][::-1]
         
+        pca_idx = std.argsort()[-best_of:][::-1]
         e1_pca = e1[pca_idx.tolist()]
         e2_pca = e2[pca_idx.tolist()]
         
         sim = compare_samples(e1_pca,e2_pca)
         print(sim)
         
-        f2 = custom_center_crop_and_resize(f2,360)
+        #f2 = custom_center_crop_and_resize(f2,360)
         
         zeros = np.zeros(e2.shape)
         zeros[pca_idx.tolist()] = 1
         zeros = zeros.reshape(16,10,10)
         zeros = np.sum(zeros.reshape(16,10,10),axis=0)
-        irows, icolumns = np.where(zeros==1)
+        irows, icolumns = np.where(zeros>=1)
         coordinates = [elm for elm in zip(irows/10, icolumns/10)]
         for elm in coordinates:
-            cv2.circle(f2,(int(elm[0]*720),int(elm[1]*720)),36,(255,255,255),3)
+            cv2.circle(f2,(int(elm[0]*360+180),int(elm[1]*360)),10,(255,255,255),1)
         
         cv2.rectangle(f2, (0, 0), (390,50), (64,64,64), -1)
         
@@ -242,5 +245,5 @@ def compare_continuous(model,
         cnt_w += 1
     
 compare_continuous(model,cam,queue = 5,
-                   memory_size = 1024,
+                   memory_size = 8192, best_of = 64,
                    anchor_frame_change_interval = 270)
